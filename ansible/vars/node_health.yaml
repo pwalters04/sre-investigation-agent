@@ -1,0 +1,14 @@
+# ansible/vars/node_health.yaml
+---
+node_health_conditions:
+  - Ready
+  - MemoryPressure
+  - DiskPressure
+  - PIDPressure
+  - NetworkUnavailable
+
+node_terminal_pod_phases:
+  - Succeeded
+  - Failed
+
+node_ip_address_type: InternalIP

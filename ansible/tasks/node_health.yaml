@@ -1,0 +1,141 @@
+---
+- name: Get cluster nodes
+  ansible.builtin.command:
+    cmd: kubectl get nodes -o json
+  register: nodes
+  changed_when: false
+
+- name: Get cluster pods
+  ansible.builtin.command:
+    cmd: kubectl get pods -A -o json
+  register: pods
+  changed_when: false
+
+- name: Initialize node health results
+  ansible.builtin.set_fact:
+    node_results: []
+    node_condition_results: {}
+    node_health_conditions:
+      - MemoryPressure
+      - DiskPressure
+      - PIDPressure
+    node_ip_address_type: InternalIP
+    node_terminal_pod_phases:
+      - Succeeded
+      - Failed
+
+- name: Build node condition results
+  ansible.builtin.set_fact:
+    node_condition_results: >-
+      {{
+        node_condition_results
+        | combine({
+            item.0.metadata.name:
+              (
+                node_condition_results[item.0.metadata.name]
+                | default([])
+              )
+              + [{
+                  'type': item.1.type,
+                  'status': item.1.status,
+                  'reason': item.1.reason
+                }]
+          })
+      }}
+  loop: >-
+    {{
+      (nodes.stdout | from_json)['items']
+      | subelements('status.conditions')
+    }}
+  when: item.1.type in node_health_conditions
+  loop_control:
+    label: "{{ item.0.metadata.name }} - {{ item.1.type }}"
+
+- name: Build node health results
+  ansible.builtin.set_fact:
+    node_results: >-
+      {{
+        node_results + [{
+          'name': item.metadata.name,
+
+          'ip': (
+            item.status.addresses
+            | selectattr('type', 'equalto', node_ip_address_type)
+            | map(attribute='address')
+            | first
+            | default('unknown')
+          ),
+
+          'status': (
+            'Ready'
+            if (
+              item.status.conditions
+              | selectattr('type', 'equalto', 'Ready')
+              | selectattr('status', 'equalto', 'True')
+              | list
+              | length
+            ) > 0
+            else 'NotReady'
+          ),
+
+          'conditions': (
+            node_condition_results[item.metadata.name]
+            | default([])
+          ),
+
+          'non_terminated_pods': (
+            pod_items
+            | selectattr('spec.nodeName', 'defined')
+            | selectattr('spec.nodeName', 'equalto', item.metadata.name)
+            | rejectattr('status.phase', 'in', node_terminal_pod_phases)
+            | map(attribute='metadata.name')
+            | list
+          ),
+
+          'pod_count': (
+            pod_items
+            | selectattr('spec.nodeName', 'defined')
+            | selectattr('spec.nodeName', 'equalto', item.metadata.name)
+            | rejectattr('status.phase', 'in', node_terminal_pod_phases)
+            | list
+            | length
+          ),
+
+          'allocatable': {
+            'cpu': item.status.allocatable.cpu | default('unknown'),
+            'memory': item.status.allocatable.memory | default('unknown'),
+            'pods': item.status.allocatable.pods | default('unknown')
+          }
+        }]
+      }}
+  vars:
+    pod_items: >-
+      {{
+        (
+          pods.stdout
+          | default('{"items": []}', true)
+          | from_json
+        )['items']
+        | default([], true)
+      }}
+  loop: "{{ (nodes.stdout | from_json)['items'] }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Build node health result
+  ansible.builtin.set_fact:
+    diagnostic_result:
+      diagnostic: node_health
+      results:
+        nodes: "{{ node_results }}"
+
+- name: Return node health result
+  ansible.builtin.debug:
+    msg: "{{ diagnostic_result | to_json }}"
+
+
+- name: Write node health result to results file
+  ansible.builtin.copy:
+    content: "{{ diagnostic_result | to_nice_json }}"
+    dest: "{{ evidence_output }}"
+    mode: "0600"

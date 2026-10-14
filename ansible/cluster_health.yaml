@@ -1,0 +1,28 @@
+---
+- name: Kubernetes diagnostic tool
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    diagnostic_action: ""
+    allowed_diagnostics:
+      - node_health
+      - pod_health
+      - events
+      - workload_health
+
+  pre_tasks:
+    - name: Validate diagnostic action
+      ansible.builtin.assert:
+        that:
+          - diagnostic_action is defined
+          - diagnostic_action in allowed_diagnostics
+        fail_msg: >-
+          diagnostic_action must be one of:
+          {{ allowed_diagnostics | join(', ') }}
+
+  tasks:
+    - name: Execute requested diagnostic
+      ansible.builtin.include_tasks:
+        file: "tasks/{{ diagnostic_action }}.yaml"

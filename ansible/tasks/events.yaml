@@ -1,0 +1,78 @@
+---
+- name: Get cluster events
+  ansible.builtin.command:
+    cmd: kubectl get events -A -o json
+  register: cluster_events
+  changed_when: false
+  failed_when: false
+
+- name: Initialize event results
+  ansible.builtin.set_fact:
+    event_results: []
+
+- name: Build event results
+  ansible.builtin.set_fact:
+    event_results: >-
+      {{
+        event_results + [{
+          'namespace': item.metadata.namespace | default(''),
+          'type': item.type | default(''),
+          'reason': item.reason | default(''),
+          'message': item.message | default(''),
+          'count': item.count | default(1),
+
+          'object': {
+            'kind': item.involvedObject.kind | default(''),
+            'name': item.involvedObject.name | default(''),
+            'namespace': item.involvedObject.namespace | default('')
+          },
+
+          'source': {
+            'component': item.source.component | default(''),
+            'host': item.source.host | default('')
+          },
+
+          'first_timestamp': (
+            item.firstTimestamp
+            | default('', true)
+          ),
+
+          'last_timestamp': (
+            item.lastTimestamp
+            | default('', true)
+          )
+        }]
+      }}
+  loop: >-
+    {{
+      (
+        cluster_events.stdout
+        | default('{"items": []}', true)
+        | from_json
+      )['items']
+      | default([])
+    }}
+  loop_control:
+    label: >-
+      {{
+        (item.type | default('Unknown'))
+        ~ ' - '
+        ~ (item.reason | default('Unknown'))
+        ~ ' - '
+        ~ (item.involvedObject.kind | default('Unknown'))
+        ~ '/'
+        ~ (item.involvedObject.name | default('Unknown'))
+      }}
+
+- name: Build events result
+  ansible.builtin.set_fact:
+    diagnostic_result:
+      diagnostic: events
+      results:
+        events: "{{ event_results }}"
+
+- name: Write events result
+  ansible.builtin.copy:
+    content: "{{ diagnostic_result | to_nice_json }}"
+    dest: "{{ evidence_output }}"
+    mode: "0600"

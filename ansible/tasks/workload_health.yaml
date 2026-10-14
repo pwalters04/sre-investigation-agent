@@ -1,0 +1,168 @@
+---
+- name: Get deployments
+  ansible.builtin.command:
+    cmd: kubectl get deployments -A -o json
+  register: deployments
+  changed_when: false
+
+- name: Get statefulsets
+  ansible.builtin.command:
+    cmd: kubectl get statefulsets -A -o json
+  register: statefulsets
+  changed_when: false
+
+- name: Get daemonsets
+  ansible.builtin.command:
+    cmd: kubectl get daemonsets -A -o json
+  register: daemonsets
+  changed_when: false
+
+- name: Initialize workload health results
+  ansible.builtin.set_fact:
+    deployment_results: []
+    statefulset_results: []
+    daemonset_results: []
+
+# ---------------------------------------------------------
+# Deployments
+# ---------------------------------------------------------
+
+- name: Build deployment health results
+  ansible.builtin.set_fact:
+    deployment_results: >-
+      {{
+        deployment_results + [{
+          'namespace': item.metadata.namespace,
+          'name': item.metadata.name,
+
+          'replicas': {
+            'desired': item.spec.replicas | default(0),
+            'current': item.status.replicas | default(0),
+            'ready': item.status.readyReplicas | default(0),
+            'available': item.status.availableReplicas | default(0),
+            'updated': item.status.updatedReplicas | default(0),
+            'unavailable': item.status.unavailableReplicas | default(0)
+          },
+
+          'conditions': (
+            item.status.conditions
+            | default([])
+          )
+        }]
+      }}
+  loop: >-
+    {{
+      (
+        deployments.stdout
+        | default('{"items": []}', true)
+        | from_json
+      )['items']
+      | default([])
+    }}
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+
+# ---------------------------------------------------------
+# StatefulSets
+# ---------------------------------------------------------
+
+- name: Build statefulset health results
+  ansible.builtin.set_fact:
+    statefulset_results: >-
+      {{
+        statefulset_results + [{
+          'namespace': item.metadata.namespace,
+          'name': item.metadata.name,
+
+          'replicas': {
+            'desired': item.spec.replicas | default(0),
+            'current': item.status.currentReplicas | default(0),
+            'ready': item.status.readyReplicas | default(0),
+            'available': item.status.availableReplicas | default(0),
+            'updated': item.status.updatedReplicas | default(0)
+          },
+
+          'current_revision': (
+            item.status.currentRevision
+            | default('')
+          ),
+
+          'update_revision': (
+            item.status.updateRevision
+            | default('')
+          )
+        }]
+      }}
+  loop: >-
+    {{
+      (
+        statefulsets.stdout
+        | default('{"items": []}', true)
+        | from_json
+      )['items']
+      | default([])
+    }}
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+
+# ---------------------------------------------------------
+# DaemonSets
+# ---------------------------------------------------------
+
+- name: Build daemonset health results
+  ansible.builtin.set_fact:
+    daemonset_results: >-
+      {{
+        daemonset_results + [{
+          'namespace': item.metadata.namespace,
+          'name': item.metadata.name,
+
+          'scheduled': {
+            'desired': item.status.desiredNumberScheduled | default(0),
+            'current': item.status.currentNumberScheduled | default(0),
+            'ready': item.status.numberReady | default(0),
+            'available': item.status.numberAvailable | default(0),
+            'unavailable': item.status.numberUnavailable | default(0)
+          },
+
+          'updated': (
+            item.status.updatedNumberScheduled
+            | default(0)
+          ),
+
+          'misscheduled': (
+            item.status.numberMisscheduled
+            | default(0)
+          )
+        }]
+      }}
+  loop: >-
+    {{
+      (
+        daemonsets.stdout
+        | default('{"items": []}', true)
+        | from_json
+      )['items']
+      | default([])
+    }}
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+
+# ---------------------------------------------------------
+# Diagnostic Result
+# ---------------------------------------------------------
+
+- name: Build workload health result
+  ansible.builtin.set_fact:
+    diagnostic_result:
+      diagnostic: workload_health
+      results:
+        deployments: "{{ deployment_results }}"
+        statefulsets: "{{ statefulset_results }}"
+        daemonsets: "{{ daemonset_results }}"
+
+- name: Write workload health result
+  ansible.builtin.copy:
+    content: "{{ diagnostic_result | to_nice_json }}"
+    dest: "{{ evidence_output }}"
+    mode: "0600"

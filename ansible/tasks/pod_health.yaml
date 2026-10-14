@@ -1,0 +1,148 @@
+---
+- name: Get cluster pods
+  ansible.builtin.command:
+    cmd: kubectl get pods -A -o json
+  register: pods
+  changed_when: false
+
+- name: Get pod events
+  ansible.builtin.command:
+    cmd: kubectl get events -A --field-selector involvedObject.kind=Pod -o json
+  register: pod_events
+  changed_when: false
+  failed_when: false
+
+- name: Initialize pod health results
+  ansible.builtin.set_fact:
+    pod_results: []
+    pod_event_results: {}
+
+- name: Build pod event results
+  ansible.builtin.set_fact:
+    pod_event_results: >-
+      {{
+        pod_event_results
+        | combine({
+            event_key:
+              (
+                pod_event_results[event_key]
+                | default([])
+              )
+              + [{
+                  'type': item.type | default('Normal'),
+                  'reason': item.reason | default(''),
+                  'message': item.message | default(''),
+                  'count': item.count | default(1)
+                }]
+          })
+      }}
+  vars:
+    event_key: >-
+      {{
+        item.metadata.namespace
+        ~ '/'
+        ~ item.involvedObject.name
+      }}
+  loop: >-
+    {{
+      (
+        pod_events.stdout
+        | default('{"items": []}', true)
+        | from_json
+      )['items']
+      | default([])
+    }}
+  loop_control:
+    label: >-
+      {{
+        item.metadata.namespace
+        ~ '/'
+        ~ item.involvedObject.name
+        ~ ' - '
+        ~ (item.reason | default('Unknown'))
+      }}
+
+- name: Build pod health results
+  ansible.builtin.set_fact:
+    pod_results: >-
+      {{
+        pod_results + [{
+          'namespace': item.metadata.namespace,
+
+          'name': item.metadata.name,
+
+          'node': (
+            item.spec.nodeName
+            | default('unassigned', true)
+          ),
+
+          'pod_ip': (
+            item.status.podIP
+            | default('', true)
+          ),
+
+          'phase': (
+            item.status.phase
+            | default('Unknown', true)
+          ),
+
+          'reason': (
+            item.status.reason
+            | default('', true)
+          ),
+
+          'conditions': (
+            item.status.conditions
+            | default([])
+            | selectattr(
+                'type',
+                'in',
+                ['Ready', 'ContainersReady', 'PodScheduled']
+              )
+            | list
+          ),
+
+          'container_statuses': (
+            item.status.containerStatuses
+            | default([])
+          ),
+
+          'containers': (
+            item.spec.containers
+            | default([])
+          ),
+
+          'init_container_statuses': (
+            item.status.initContainerStatuses
+            | default([])
+          ),
+
+          'init_containers': (
+            item.spec.initContainers
+            | default([])
+          ),
+
+          'events': (
+            pod_event_results[
+              item.metadata.namespace ~ '/' ~ item.metadata.name
+            ]
+            | default([])
+          )
+        }]
+      }}
+  loop: "{{ (pods.stdout | from_json)['items'] }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+
+- name: Build pod health result
+  ansible.builtin.set_fact:
+    diagnostic_result:
+      diagnostic: pod_health
+      results:
+        pods: "{{ pod_results }}"
+
+- name: Write pod health result
+  ansible.builtin.copy:
+    content: "{{ diagnostic_result | to_nice_json }}"
+    dest: "{{ evidence_output }}"
+    mode: "0600"
