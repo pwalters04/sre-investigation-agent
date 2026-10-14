@@ -4,6 +4,30 @@ A proof-of-concept agentic SRE investigation system built in Go.
 
 The agent investigates Kubernetes incidents by reasoning over structured diagnostic evidence and selecting from a constrained set of read-only tools. Go manages state, guardrails, execution flow, and stopping conditions, while Ansible provides deterministic Kubernetes diagnostics.
 
+## Prerequisites
+
+To run the agent, you need:
+
+- Go
+- Ansible
+- `kubectl`
+- Access to a Kubernetes cluster
+- An OpenAI API key
+
+The LLM reasoner uses the OpenAI API, so the API key must be available as an environment variable before starting the agent.
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+```
+
+You can confirm that the variable is set with:
+
+```bash
+echo $OPENAI_API_KEY
+```
+
+Do not commit the API key to the repository or store it directly in the Go source code.
+
 ## Current Architecture
 
 ```text
